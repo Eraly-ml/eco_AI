@@ -1,6 +1,6 @@
-fastai
-torch
-Pillow
-nest-asyncio
-python-telegram-bot
-gdown
+fastai==2.7.18
+torch==1.12.0
+Pillow==11.0.0
+nest-asyncio==1.6.0
+python-telegram-bot==21.9
+gdown==5.2.0
