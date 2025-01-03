@@ -3,3 +3,4 @@ torch
 Pillow
 nest-asyncio
 python-telegram-bot
+gdown
