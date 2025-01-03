@@ -8,21 +8,11 @@ import os
 import pickle
 from fastai.vision.all import *
 from PIL import Image
+import gdown
 
-def аload_model():
-    import gdown
-    url = "https://drive.google.com/uc?id=1aotofx1LuFD8-Pr76sOzez5CvPQaUT_k"
-    output = "my_eco_model.pkl"
-    if not os.path.exists(output):
-        print("Загружаю модель...")
-        gdown.download(url, output, quiet=False)
-    try:
-        model = load_learner(output)
-        print("Модель успешно загружена!")
-        return model
-    except Exception as e:
-        print(f"Ошибка при загрузке модели: {e}")
-        return None
+url = "https://drive.google.com/uc?id=1aotofx1LuFD8-Pr76sOzez5CvPQaUT_k"
+output = "my_eco_model.pkl"
+gdown.download(url, output, quiet=False)
 
 
 def load_model():
