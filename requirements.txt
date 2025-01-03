@@ -1,6 +1,7 @@
 telegram==0.0.1
 json5==0.9.28
 torch==2.5.1
+torchvision==0.20.0
 fastai==2.7.10
 Pillow==11.0.0
 nest-asyncio==1.6.0
