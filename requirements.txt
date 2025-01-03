@@ -1,4 +1,4 @@
-torch==1.12.0
+torch==2.5.1
 torchvision==0.13.0
 fastai==2.7.18
 pillow==11.0.0
