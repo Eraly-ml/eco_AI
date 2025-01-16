@@ -2,3 +2,4 @@ python-telegram-bot==21.9
 nest-asyncio==1.5.8
 Pillow
 tflite-runtime
+aiosqlite
