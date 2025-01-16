@@ -1,9 +1,4 @@
-telegram==0.0.1
-json5==0.9.28
-fastai
-torch
-torchvision
-Pillow==11.0.0
-nest-asyncio==1.6.0
 python-telegram-bot==21.9
-gdown==5.2.0
+nest-asyncio==1.5.8
+Pillow
+tflite-runtime
