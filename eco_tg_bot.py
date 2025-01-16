@@ -1,240 +1,268 @@
-import torch
+import os
+import time
+import logging
+import sqlite3
+import numpy as np
+import nest_asyncio
 from PIL import Image
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, CallbackQueryHandler, filters
-import json
-import nest_asyncio
-import os
-import pickle
-from fastai.vision.all import *
-from PIL import Image
-import gdown
+from tflite_runtime.interpreter import Interpreter
 
-url = "https://drive.google.com/uc?id=1aotofx1LuFD8-Pr76sOzez5CvPQaUT_k"
-output = "my_eco_model.pkl"
-gdown.download(url, output, quiet=False)
+# Настройка логирования
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
+# Загрузка переменных окружения
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+ADMIN_CHAT_ID = os.getenv("ADMIN_CHAT_ID")
 
-def load_model():
-    try:
-        # Загрузка модели
-        model = load_learner('my_eco_model.pkl')
-        print("Модель успешно загружена!")
-        return model
-    except Exception as e:
-        print(f"Ошибка при загрузке модели: {e}")
-        return None
-
-# Классификация мусора через PyTorch с использованием FastAI
-def classify_trash(learn, image_path):
-    try:
-        img = PILImage.create(image_path)  # Открытие изображения с помощью FastAI
-        pred_class, pred_idx, outputs = learn.predict(img)  # Предсказание класса
-        return str(pred_class)  # Возвращаем строковое представление класса
-    except Exception as e:
-        print(f"Ошибка при классификации изображения: {e}")
-        return "Ошибка при классификации."
-
-
+# Применение nest_asyncio для работы в Jupyter/Colab
 nest_asyncio.apply()
 
-# Проверка наличия модели
-if not os.path.exists('my_eco_model.pkl'):
-    print("Файл модели не найден!")
+# Инициализация базы данных
+def init_db():
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            user_id INTEGER PRIMARY KEY,
+            points INTEGER DEFAULT 0
+        )
+    ''')
+    conn.commit()
+    conn.close()
 
-# Команда /myid для вывода ID пользователя
-async def myid(update: Update, context):
-    user_id = update.message.from_user.id  # Получаем ID пользователя
-    await update.message.reply_text(f"Ваш ID: {user_id}")
-    
-# Загрузка данных пользователей из JSON
-def load_user_data():
-    try:
-        with open("user_data.json", "r") as file:
-            return json.load(file)
-    except FileNotFoundError:
-        return {}
+# Добавление пользователя в базу данных
+def add_user(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT OR IGNORE INTO users (user_id) VALUES (?)', (user_id,))
+    conn.commit()
+    conn.close()
 
-# Сохранение данных пользователей в JSON
-def save_user_data(user_data):
-    with open("user_data.json", "w") as file:
-        json.dump(user_data, file)
-
-# Инициализация данных пользователей
-user_data = load_user_data()
-
-# Функция для начисления очков
+# Добавление очков пользователю
 def add_points(user_id, points):
-    if user_id not in user_data:
-        user_data[user_id] = {"points": 0}  # Если пользователя нет в данных, создаем запись с 0 очками
-    user_data[user_id]["points"] += points  # Добавляем очки
-    save_user_data(user_data)  # Сохраняем данные
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('UPDATE users SET points = points + ? WHERE user_id = ?', (points, user_id))
+    conn.commit()
+    conn.close()
 
-# Команда /stat для получения очков пользователя по его user_id
+# Получение очков пользователя
+def get_user_points(user_id):
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT points FROM users WHERE user_id = ?', (user_id,))
+    result = cursor.fetchone()
+    conn.close()
+    return result[0] if result else 0
+
+# Получение топ-10 пользователей
+def get_top_users():
+    conn = sqlite3.connect('bot_database.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT user_id, points FROM users ORDER BY points DESC LIMIT 10')
+    result = cursor.fetchall()
+    conn.close()
+    return result
+
+# Загрузка модели TensorFlow Lite
+def load_tflite_model():
+    try:
+        interpreter = Interpreter(model_path="model.tflite")
+        interpreter.allocate_tensors()
+        logger.info("Модель TensorFlow Lite успешно загружена!")
+        return interpreter
+    except Exception as e:
+        logger.error(f"Ошибка при загрузке модели: {e}")
+        return None
+
+# Классификация мусора
+def classify_trash(interpreter, image_path):
+    try:
+        input_details = interpreter.get_input_details()
+        output_details = interpreter.get_output_details()
+
+        img = Image.open(image_path).resize((224, 224))
+        img = np.array(img, dtype=np.float32) / 255.0
+        img = np.expand_dims(img, axis=0)
+
+        interpreter.set_tensor(input_details[0]['index'], img)
+        interpreter.invoke()
+        output_data = interpreter.get_tensor(output_details[0]['index'])
+
+        class_idx = np.argmax(output_data)
+        return f"Класс мусора: {class_idx}"
+    except Exception as e:
+        logger.error(f"Ошибка при классификации изображения: {e}")
+        return "Ошибка при классификации."
+
+# Команда /myid
+async def myid(update: Update, context):
+    user_id = update.message.from_user.id
+    await update.message.reply_text(f"Ваш ID: {user_id}")
+
+# Команда /stat
 async def stat(update: Update, context):
-    # Проверка, что ID передан в команде
     if len(context.args) > 0:
         try:
-            target_user_id = str(context.args[0])  # Преобразуем в строку
-            user_data = load_user_data()  # Загружаем актуальные данные из файла
-            print(f"Загруженные данные: {user_data}")  # Логируем данные
-
-
-            # Проверяем, есть ли user_id в данных
-            if target_user_id in user_data:
-                points = user_data[target_user_id]["points"]
-                await update.message.reply_text(f"Пользователь с ID {target_user_id} имеет {points} очков.")
-            else:
-                await update.message.reply_text(f"Пользователь с ID {target_user_id} не найден.")
+            target_user_id = int(context.args[0])
+            points = get_user_points(target_user_id)
+            await update.message.reply_text(f"Пользователь с ID {target_user_id} имеет {points} очков.")
         except ValueError:
             await update.message.reply_text("Пожалуйста, введите корректный числовой ID.")
     else:
         await update.message.reply_text("Пожалуйста, укажите ID пользователя после команды /stat.")
 
-
-# Команда для получения топ-10 участников
+# Команда /top
 async def top(update: Update, context):
-    user_data = load_user_data()  # Загружаем актуальные данные перед выводом топа
-    top_users = sorted(user_data.items(), key=lambda x: x[1]["points"], reverse=True)[:10]
+    top_users = get_top_users()
     top_message = "Топ-10 участников по очкам:\n"
-    for idx, (user_id, data) in enumerate(top_users, 1):
-        top_message += f"{idx}. Пользователь {user_id}: {data['points']} очков\n"
+    for idx, (user_id, points) in enumerate(top_users, 1):
+        top_message += f"{idx}. Пользователь {user_id}: {points} очков\n"
 
     if not top_users:
         top_message = "Рейтинг пуст. Участвуйте в сборе мусора, чтобы попасть в топ!"
 
     await update.message.reply_text(top_message)
 
-# Команда /my для вывода очков пользователя
+# Команда /my
 async def my(update: Update, context):
     if update.message and update.message.from_user:
         user_id = update.message.from_user.id
-        print(f"Получен user_id: {user_id}")  # Логируем user_id
-
-        user_data = load_user_data()  # Загружаем актуальные данные перед отправкой
-        if user_id in user_data:
-            points = user_data[user_id]["points"]
-            await update.message.reply_text(f"У вас {points} очков.")
-        else:
-            await update.message.reply_text("Вы еще не начали участвовать. Отправьте геолокацию и начните собирать мусор!")
+        points = get_user_points(user_id)
+        await update.message.reply_text(f"У вас {points} очков.")
     else:
-        print("Ошибка: Не удалось получить user_id или update.message отсутствует.")
+        logger.error("Ошибка: Не удалось получить user_id или update.message отсутствует.")
         await update.message.reply_text("Произошла ошибка: не удалось определить ваш идентификатор.")
 
-
-# Стартовая команда
+# Команда /start
 async def start(update: Update, context):
     user_id = update.message.from_user.id
-    user_data = load_user_data()  # Загружаем актуальные данные
-    if user_id not in user_data:
-        user_data[user_id] = {"points": 0}  # Если пользователя нет в данных, создаем запись с 0 очками
-        save_user_data(user_data)  # Сохраняем изменения
+    add_user(user_id)
     await update.message.reply_text("Привет! Отправьте геолокацию места, где вы нашли мусор.")
 
-# Обработка геолокации
+# Обработчик геолокации
 async def location_handler(update: Update, context):
-    user_id = update.message.from_user.id
-    latitude = update.message.location.latitude
-    longitude = update.message.location.longitude
-    context.user_data['latitude'] = latitude
-    context.user_data['longitude'] = longitude
-    await update.message.reply_text("Геолокация сохранена! Теперь отправьте фото мусора.")
+    try:
+        user_id = update.message.from_user.id
+        latitude = update.message.location.latitude
+        longitude = update.message.location.longitude
+        context.user_data['latitude'] = latitude
+        context.user_data['longitude'] = longitude
+        await update.message.reply_text("Геолокация сохранена! Теперь отправьте фото мусора.")
+    except Exception as e:
+        logger.error(f"Ошибка в location_handler: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке геолокации. Попробуйте ещё раз.")
 
-# Обработка фото мусора
+# Обработчик фото
 async def photo_handler(update: Update, context):
-    user_id = update.message.from_user.id
-    latitude = context.user_data.get('latitude')
-    longitude = context.user_data.get('longitude')
-    photo = await update.message.photo[-1].get_file()
-    photo_path = f"{user_id}_photo.jpg"
-    await photo.download_to_drive(photo_path)
+    try:
+        user_id = update.message.from_user.id
+        latitude = context.user_data.get('latitude')
+        longitude = context.user_data.get('longitude')
+        photo = await update.message.photo[-1].get_file()
+        photo_path = f"{user_id}_{int(time.time())}_photo.jpg"
+        await photo.download_to_drive(photo_path)
 
-    # Загрузка модели и меток классов
-    model = load_model()
-    if not model:
-        await update.message.reply_text("Ошибка загрузки модели. Попробуйте позже.")
+        interpreter = context.application.context_data["interpreter"]
+        if not interpreter:
+            await update.message.reply_text("Ошибка загрузки модели. Попробуйте позже.")
+            return
+
+        trash_type = classify_trash(interpreter, photo_path)
+        context.user_data['photo_path'] = photo_path
+        context.user_data['trash_type'] = trash_type
+
+        await update.message.reply_text(f"Фото получено! Мусор классифицирован как: {trash_type}. Теперь отправьте видео, где вы выбрасываете этот мусор в контейнер.")
+    except Exception as e:
+        logger.error(f"Ошибка в photo_handler: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке фото. Попробуйте ещё раз.")
+    finally:
+        if os.path.exists(photo_path):
+            os.remove(photo_path)
+
+# Обработчик видео
+async def video_handler(update: Update, context):
+    try:
+        user_id = update.message.from_user.id
+        video = await update.message.video.get_file()
+        video_path = f"{user_id}_{int(time.time())}_video.mp4"
+        await video.download_to_drive(video_path)
+
+        latitude = context.user_data.get('latitude')
+        longitude = context.user_data.get('longitude')
+        photo_path = context.user_data.get('photo_path')
+        trash_type = context.user_data.get('trash_type')
+
+        keyboard = [
+            [InlineKeyboardButton("Принять", callback_data=f"approve_{user_id}"),
+             InlineKeyboardButton("Отклонить", callback_data=f"reject_{user_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"Заявка от пользователя {user_id}:\n"
+                                                                  f"Геолокация: {latitude}, {longitude}\n"
+                                                                  f"Тип мусора: {trash_type}")
+        with open(photo_path, 'rb') as photo_file:
+            await context.bot.send_photo(chat_id=ADMIN_CHAT_ID, photo=photo_file)
+        with open(video_path, 'rb') as video_file:
+            await context.bot.send_video(chat_id=ADMIN_CHAT_ID, video=video_file, reply_markup=reply_markup)
+
+        await update.message.reply_text("Спасибо! Ваша заявка отправлена на проверку.")
+    except Exception as e:
+        logger.error(f"Ошибка в video_handler: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке видео. Попробуйте ещё раз.")
+    finally:
+        if os.path.exists(video_path):
+            os.remove(video_path)
+
+# Обработчик кнопок
+async def button_handler(update: Update, context):
+    try:
+        query = update.callback_query
+        await query.answer()
+
+        action, user_id = query.data.split("_")
+        user_id = int(user_id)
+
+        if action == "approve":
+            add_points(user_id, 5)
+            message = "Заявка принята! Вы получили 5 очков."
+            admin_message = f"Заявка от пользователя {user_id} принята. Ему начислено 5 очков."
+        elif action == "reject":
+            message = "Заявка отклонена."
+            admin_message = f"Заявка от пользователя {user_id} отклонена."
+
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=admin_message)
+        await query.edit_message_text(text=message)
+    except Exception as e:
+        logger.error(f"Ошибка в button_handler: {e}")
+
+# Основная функция
+async def main():
+    init_db()  # Инициализация базы данных
+    application = Application.builder().token(TOKEN).build()
+    interpreter = load_tflite_model()
+    if not interpreter:
+        logger.error("Не удалось загрузить модель TensorFlow Lite. Бот остановлен.")
         return
 
-    trash_type = classify_trash(model, photo_path)
-    context.user_data['photo_path'] = photo_path
-    context.user_data['trash_type'] = trash_type
+    application.context_data = {"interpreter": interpreter}
 
-    await update.message.reply_text(f"Фото получено! Мусор классифицирован как: {trash_type}. Теперь отправьте видео, где вы выбрасываете этот мусор в контейнер.")
-
-# Обработка видео
-async def video_handler(update: Update, context):
-    user_id = update.message.from_user.id
-    video = await update.message.video.get_file()
-    video_path = f"{user_id}_video.mp4"
-    await video.download_to_drive(video_path)
-
-    # Сохранение заявки
-    latitude = context.user_data.get('latitude')
-    longitude = context.user_data.get('longitude')
-    photo_path = context.user_data.get('photo_path')
-    trash_type = context.user_data.get('trash_type')
-
-    # Отправка данных админу
-    admin_chat_id = "-4797993721"  # Замените на ID чата администрации
-    keyboard = [
-        [InlineKeyboardButton("Принять", callback_data=f"approve_{user_id}"),
-         InlineKeyboardButton("Отклонить", callback_data=f"reject_{user_id}")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
-    # Отправка сообщения с кнопками "Принять" и "Отклонить"
-    await context.bot.send_message(chat_id=admin_chat_id, text=f"Заявка от пользователя {user_id}:\n"
-                                                               f"Геолокация: {latitude}, {longitude}\n"
-                                                               f"Тип мусора который отгадала ИИ: {trash_type}")
-    await context.bot.send_photo(chat_id=admin_chat_id, photo=open(photo_path, 'rb'))
-    await context.bot.send_video(chat_id=admin_chat_id, video=open(video_path, 'rb'), reply_markup=reply_markup)
-
-    await update.message.reply_text("Спасибо! Ваша заявка отправлена на проверку.Проверьте свои очки с помощью команды /stat")
-
-# Обработчик нажатий кнопок
-async def button_handler(update: Update, context):
-    query = update.callback_query
-    await query.answer()
-
-    action, user_id = query.data.split("_")
-
-    if action == "approve":
-        # Начисление очков после принятия заявки
-        add_points(int(user_id), 5)  # Например, начисляем 5 очков за принятие заявки
-        message = "Заявка принята! Вы получили 5 очков."
-        admin_message = f"Заявка от пользователя {user_id} принята. Ему начислено 5 очков."
-    elif action == "reject":
-        message = "Заявка отклонена."
-        admin_message = f"Заявка от пользователя {user_id} отклонена."
-
-    # Отправляем сообщение админу в отдельное сообщение
-    admin_chat_id = "-4797993721"  # Замените на ID чата администрации
-    await context.bot.send_message(chat_id=admin_chat_id, text=admin_message)
-
-    # Сохраняем изменения в файл
-    save_user_data(user_data)
-
-# Запуск приложения
-async def main():
-    application = Application.builder().token("7558746932:AAHLvdcnuDF2qdbtSMHKk8-bzJJk5WYqXTo").build()
-
-    # Обработчики
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("my", my))  # Добавляем команду /my
+    application.add_handler(CommandHandler("my", my))
+    application.add_handler(CommandHandler("stat", stat))
+    application.add_handler(CommandHandler("top", top))
+    application.add_handler(CommandHandler("myid", myid))
     application.add_handler(MessageHandler(filters.LOCATION, location_handler))
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     application.add_handler(MessageHandler(filters.VIDEO, video_handler))
     application.add_handler(CallbackQueryHandler(button_handler))
-    application.add_handler(CommandHandler("stat", stat))  # Добавляем команду /stat
-    application.add_handler(CommandHandler("top", top))
-    application.add_handler(CommandHandler("myid", myid)) # Включаем обработчик команды /myid
 
-
-    # Запуск
     await application.run_polling()
 
-# Запуск бота
 if __name__ == '__main__':
     import asyncio
     asyncio.run(main())
-
