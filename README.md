@@ -85,15 +85,23 @@ repository/
 3. Submissions are reviewed by an admin and sendet to private chat of admins.
 4. Approved submissions earn points and update the leaderboard.
 ## information
-User data using only for bots works and rate work of user
+
+User data is used exclusively for bot functionality and to evaluate user contributions.
 ## Contributing
 
-I don't know but you can call me or send massege to my telegram @eralyf
+Currently, contribution guidelines are informal. Feel free to reach out via Telegram: @eralyf
 
 ## License
 
 This project is licensed under the MIT License. See the LICENSE file for details, also we have liberies like python-telegram-bot from telegram
 
 ## Contact
-For questions or support, contact the repository owner use telegram @eralyf
+For questions or contact the repository owner use telegram @eralyf
+
+## Support the Developer  
+
+If you'd like to support my work, consider subscribing to my Telegram channel:  
+🔗 **[EraJustML](https://t.me/erajustml)** 
+
+Your support means a lot!
 
