@@ -93,7 +93,7 @@ Currently, contribution guidelines are informal. Feel free to reach out via Tele
 
 ## License
 
-This project is licensed under the MIT License. See the LICENSE file for details, also we have liberies like python-telegram-bot from telegram
+This project is licensed under the MIT License. See the LICENSE file for details, also we use liberies like python-telegram-bot from telegram
 
 ## Contact
 For questions or contact the repository owner use telegram @eralyf
