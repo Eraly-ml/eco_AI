@@ -3,3 +3,4 @@ nest-asyncio==1.5.8
 Pillow
 tflite-runtime
 aiosqlite
+folium
