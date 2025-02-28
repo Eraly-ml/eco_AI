@@ -9,6 +9,7 @@ This bot promotes environmental awareness by allowing users to classify trash, s
 - **Submission Approval**: Admins approve or reject user submissions via inline buttons.
 - **Point System**: Users earn points for approved submissions, with a leaderboard to track top contributors.
 - **Database Integration**: Tracks user points and submissions using SQLite.
+- **Geolacation of trash places**
 
 ## Requirements
 - Python check the runtime.txt
@@ -18,6 +19,7 @@ This bot promotes environmental awareness by allowing users to classify trash, s
 - SQLite3
 - Nest Asyncio
 - Python-Telegram-Bot
+- folium
 
 ## Installation
 
